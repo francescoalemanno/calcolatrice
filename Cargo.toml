@@ -1,0 +1,22 @@
+[package]
+name = "calcolatrice"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Calcolatrice scientifica con formule e grafici delle variabili libere, in stile macOS (Rust + egui)"
+license = "MIT"
+authors = ["Francesco Alemanno <francescoalemanno710@gmail.com>"]
+repository = "https://github.com/francescoalemanno/calcolatrice"
+readme = "README.md"
+keywords = ["calculator", "plotting", "egui", "math"]
+categories = ["mathematics", "visualization"]
+
+[dependencies]
+eframe = { version = "0.37", features = ["persistence"] }
+egui = "0.37"
+egui_plot = "0.38.0"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

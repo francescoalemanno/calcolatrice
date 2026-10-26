@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Calcolatrice
+GenericName=Calcolatrice scientifica
+GenericName[en]=Scientific calculator
+Comment=Calcola formule e disegna i grafici delle variabili libere
+Comment[en]=Evaluate formulas and plot their free variables
+Exec=calcolatrice
+Icon=calcolatrice
+Terminal=false
+Categories=Utility;Calculator;Math;
+Keywords=calcolatrice;calculator;grafico;plot;matematica;math;formula;
+StartupWMClass=calcolatrice
