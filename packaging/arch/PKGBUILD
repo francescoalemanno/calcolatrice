@@ -1,7 +1,7 @@
 # Maintainer: Francesco Alemanno <francescoalemanno710@gmail.com>
 
 pkgname=calcolatrice
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='Calcolatrice scientifica con formule e grafici delle variabili libere, in stile macOS'
 arch=('x86_64' 'aarch64')
@@ -40,6 +40,10 @@ package() {
   install -Dm755 target/release/$pkgname -t "$pkgdir/usr/bin"
   install -Dm644 assets/$pkgname.desktop -t "$pkgdir/usr/share/applications"
   install -Dm644 assets/$pkgname.svg -t "$pkgdir/usr/share/icons/hicolor/scalable/apps"
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 assets/icons/${size}x${size}/$pkgname.png \
+      -t "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps"
+  done
   install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname"
   install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname"
 }

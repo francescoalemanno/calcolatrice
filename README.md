@@ -71,6 +71,9 @@ git clone https://github.com/francescoalemanno/calcolatrice.git
 cd calcolatrice
 install -Dm644 assets/calcolatrice.desktop -t ~/.local/share/applications
 install -Dm644 assets/calcolatrice.svg -t ~/.local/share/icons/hicolor/scalable/apps
+for s in 16 24 32 48 64 128 256 512; do
+  install -Dm644 assets/icons/${s}x${s}/calcolatrice.png -t ~/.local/share/icons/hicolor/${s}x${s}/apps
+done
 ```
 
 ### Dal sorgente
@@ -98,6 +101,9 @@ Il riquadro **?** nella barra in alto elenca tutte le funzioni disponibili.
 
 **Font**: l'interfaccia usa SF Pro o Inter se installati, altrimenti Noto Sans
 (`noto-fonts` su Arch), altrimenti il carattere integrato di egui.
+
+**Icona non visibile nel menu dopo l'installazione?** Su Cinnamon premi `Ctrl+Alt+Esc`
+(riavvia la shell senza chiudere le finestre); su altri desktop basta uscire e rientrare.
 
 **Dati salvati**: espressioni e impostazioni sono in `~/.local/share/calcolatrice/app.ron`.
 
