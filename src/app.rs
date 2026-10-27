@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 
 use egui::text::{CCursor, CCursorRange};
 use egui::{
-    Align, Align2, Color32, CornerRadius, FontId, Id, Key, Layout, Margin, Modifiers, Pos2, Rect,
+    Align, Align2, Color32, FontId, Id, Key, Layout, Margin, Modifiers, Pos2, Rect,
     RichText, Sense, Shadow, Stroke, StrokeKind, TextureHandle, Ui, ViewportCommand, pos2, vec2,
 };
 use egui_plot::{HLine, HoverPosition, Line, Plot as EguiPlot, PlotBounds, PlotImage, PlotPoint, PlotPoints, Points, VLine};
@@ -11,9 +11,10 @@ use egui_plot::{HLine, HoverPosition, Line, Plot as EguiPlot, PlotBounds, PlotIm
 use crate::analysis::{self, Input, Notebook, Param, Plot, Summary, pretty};
 use crate::eval::{FUNCTION_HELP, format_number, format_short};
 use crate::plotting::{self, View};
-use crate::theme::{self, Icon, KeyFace, KeyKind, Palette, WindowAction};
+use crate::theme::{self, Icon, KeyFace, KeyKind, Palette};
 
-const TITLEBAR_H: f32 = 52.0;
+/// Altezza delle barre in cima a barra laterale e grafico
+const HEADER_H: f32 = 46.0;
 const DEFAULT_VIEW: View = View { x0: -10.0, x1: 10.0, y0: -7.0, y1: 7.0 };
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -51,6 +52,9 @@ pub struct App {
     show_help: bool,
     #[serde(skip)]
     styled_dark: Option<bool>,
+    /// Il desktop usa il tema scuro (letto all'avvio)
+    #[serde(skip)]
+    system_dark: bool,
     /// Valore di `show_plot` per cui è stata impostata la dimensione minima della finestra
     #[serde(skip)]
     min_size_for: Option<bool>,
@@ -115,6 +119,7 @@ impl Default for App {
             second: false,
             show_help: false,
             styled_dark: None,
+            system_dark: false,
             min_size_for: None,
             active: None,
             focus: None,
@@ -161,6 +166,7 @@ impl App {
             .unwrap_or_default();
         app.pending_bounds = Some(DEFAULT_VIEW);
         app.plot_width = 800.0;
+        app.system_dark = theme::desktop_prefers_dark();
         // Almeno un pannello deve essere visibile
         app.show_sidebar |= !app.show_plot;
         // Si comincia a scrivere dalla barra in basso
@@ -197,7 +203,7 @@ impl App {
     }
 
     fn palette(&self, ctx: &egui::Context) -> Palette {
-        let dark = self.dark.unwrap_or_else(|| ctx.system_theme() == Some(egui::Theme::Dark));
+        let dark = self.dark.unwrap_or_else(|| self.system_dark || ctx.system_theme() == Some(egui::Theme::Dark));
         if dark { theme::DARK } else { theme::LIGHT }
     }
 
@@ -321,8 +327,8 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        [0.0; 4]
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        visuals.panel_fill.to_normalized_gamma_f32()
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -356,23 +362,16 @@ impl eframe::App for App {
         // Analisi di tutte le righe (costa microsecondi: si rifà a ogni frame).
         let (mut nb, mut roots) = self.analyze_all();
 
-        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
-        let radius: u8 = if maximized { 0 } else { 12 };
-        let full = ui.max_rect();
-        ui.painter().rect(full, radius, pal.window, Stroke::NONE, StrokeKind::Inside);
-
         if !self.show_plot {
             // Solo la barra laterale, a tutta finestra
-            let frame = egui::Frame::new().fill(pal.sidebar).corner_radius(radius);
+            let frame = egui::Frame::new().fill(pal.sidebar);
             egui::CentralPanel::default().frame(frame).show(ui, |ui| self.sidebar(ui, &pal, &mut nb, &roots));
             if nb.rows.len() != self.entries.len() {
                 ctx.request_repaint();
             }
         } else {
             if self.show_sidebar {
-                let frame = egui::Frame::new()
-                    .fill(pal.sidebar)
-                    .corner_radius(CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 });
+                let frame = egui::Frame::new().fill(pal.sidebar);
                 egui::Panel::left("sidebar")
                     .resizable(true)
                     .default_size(350.0)
@@ -386,7 +385,7 @@ impl eframe::App for App {
                 }
             }
             egui::CentralPanel::no_frame().show(ui, |ui| {
-                self.toolbar(ui, &pal, maximized);
+                self.toolbar(ui, &pal);
                 self.plot_area(ui, &pal, &mut nb, &roots);
             });
         }
@@ -395,61 +394,6 @@ impl eframe::App for App {
             self.help_window(&ctx, &pal);
         }
 
-        // Bordo sottile della finestra, sopra a tutto.
-        ui.painter().rect_stroke(
-            full,
-            radius,
-            Stroke::new(1.0, if pal.dark { Color32::from_white_alpha(28) } else { Color32::from_black_alpha(40) }),
-            StrokeKind::Inside,
-        );
-        if !maximized {
-            resize_handles(ui, full);
-        }
-    }
-}
-
-/// Zona trascinabile come barra del titolo (doppio clic = ingrandisci).
-fn title_drag_area(ui: &mut Ui, rect: Rect, id: &str, maximized: bool) {
-    let resp = ui.interact(rect, ui.scope_id().with(id), Sense::click_and_drag());
-    if resp.drag_started_by(egui::PointerButton::Primary) {
-        ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
-    }
-    if resp.double_clicked() {
-        ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!maximized));
-    }
-}
-
-fn window_action(ctx: &egui::Context, action: WindowAction, maximized: bool) {
-    match action {
-        WindowAction::Close => ctx.send_viewport_cmd(ViewportCommand::Close),
-        WindowAction::Minimize => ctx.send_viewport_cmd(ViewportCommand::Minimized(true)),
-        WindowAction::Zoom => ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized)),
-    }
-}
-
-/// Bordi e angoli per ridimensionare una finestra senza decorazioni.
-fn resize_handles(ui: &mut Ui, r: Rect) {
-    use egui::{CursorIcon as C, ResizeDirection as D};
-    let t = 5.0;
-    let k = 14.0;
-    let zones = [
-        (Rect::from_min_max(pos2(r.left() + k, r.top()), pos2(r.right() - k, r.top() + t)), D::North, C::ResizeVertical),
-        (Rect::from_min_max(pos2(r.left() + k, r.bottom() - t), pos2(r.right() - k, r.bottom())), D::South, C::ResizeVertical),
-        (Rect::from_min_max(pos2(r.left(), r.top() + k), pos2(r.left() + t, r.bottom() - k)), D::West, C::ResizeHorizontal),
-        (Rect::from_min_max(pos2(r.right() - t, r.top() + k), pos2(r.right(), r.bottom() - k)), D::East, C::ResizeHorizontal),
-        (Rect::from_min_size(r.min, vec2(k, k)), D::NorthWest, C::ResizeNwSe),
-        (Rect::from_min_size(pos2(r.right() - k, r.top()), vec2(k, k)), D::NorthEast, C::ResizeNeSw),
-        (Rect::from_min_size(pos2(r.left(), r.bottom() - k), vec2(k, k)), D::SouthWest, C::ResizeNeSw),
-        (Rect::from_min_size(r.max - vec2(k, k), vec2(k, k)), D::SouthEast, C::ResizeNwSe),
-    ];
-    for (i, (rect, dir, cursor)) in zones.into_iter().enumerate() {
-        let resp = ui.interact(rect, Id::unique(("resize", i)), Sense::drag());
-        if resp.hovered() || resp.dragged() {
-            ui.ctx().set_cursor_icon(cursor);
-        }
-        if resp.drag_started() {
-            ui.ctx().send_viewport_cmd(ViewportCommand::BeginResize(dir));
-        }
     }
 }
 
@@ -458,15 +402,10 @@ fn resize_handles(ui: &mut Ui, r: Rect) {
 impl App {
     fn sidebar(&mut self, ui: &mut Ui, pal: &Palette, nb: &mut Notebook, roots: &[Option<Vec<f64>>]) {
         let ctx = ui.ctx().clone();
-        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let top = ui.max_rect();
-        let bar = Rect::from_min_size(top.min, vec2(top.width(), TITLEBAR_H));
-        title_drag_area(ui, bar, "sidebar-title", maximized);
-        if let Some(a) = theme::traffic_lights(ui, top.min + vec2(18.0, 20.0)) {
-            window_action(&ctx, a, maximized);
-        }
-        // Pulsanti a destra dei semafori; senza grafico qui stanno anche quelli della toolbar
-        let buttons = Rect::from_min_max(pos2(bar.left() + 90.0, bar.top() + 12.0), pos2(bar.right() - 12.0, bar.top() + 40.0));
+        let bar = Rect::from_min_size(top.min, vec2(top.width(), HEADER_H));
+        // Pulsanti in alto a destra; senza grafico qui stanno anche quelli della toolbar
+        let buttons = Rect::from_min_max(pos2(bar.left() + 12.0, bar.top() + 9.0), pos2(bar.right() - 12.0, bar.top() + 37.0));
         let mut buttons_ui = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(Layout::right_to_left(Align::Center)));
         buttons_ui.spacing_mut().item_spacing.x = 4.0;
         if theme::toolbar_button(&mut buttons_ui, pal, Icon::Plus, false, "Nuova espressione").clicked() {
@@ -488,7 +427,7 @@ impl App {
                 self.dark = Some(!pal.dark);
             }
         }
-        ui.add_space(TITLEBAR_H);
+        ui.add_space(HEADER_H);
 
         if self.show_keypad {
             // Il tastierino non deve prendere più di ~60% della barra laterale.
@@ -691,7 +630,7 @@ impl App {
                 self.reveal = None;
             }
             if has_focus {
-                // Anello di fuoco macOS
+                // Anello di fuoco
                 ui.painter().rect_stroke(
                     card.response.rect.expand(2.0),
                     12,
@@ -874,7 +813,7 @@ fn summary_row(
     }
 }
 
-/// Tastierino in stile Calcolatrice di macOS. Restituisce l'azione premuta.
+/// Tastierino della calcolatrice. Restituisce l'azione premuta.
 /// In modalità scientifica sopra ai tasti base compaiono i tasti funzione;
 /// con "2nd" attivo diventano le rispettive inverse.
 fn keypad(ui: &mut Ui, pal: &Palette, scientific: bool, second: bool, degrees: bool, max_h: f32) -> Option<KeyAction> {
@@ -946,22 +885,12 @@ fn keypad(ui: &mut Ui, pal: &Palette, scientific: bool, second: bool, degrees: b
 // ─────────────────────────────── Toolbar e grafico ───────────────────────────────
 
 impl App {
-    fn toolbar(&mut self, ui: &mut Ui, pal: &Palette, maximized: bool) {
-        let ctx = ui.ctx().clone();
+    fn toolbar(&mut self, ui: &mut Ui, pal: &Palette) {
         let full = ui.max_rect();
-        let bar = Rect::from_min_size(full.min, vec2(full.width(), TITLEBAR_H));
-        title_drag_area(ui, bar, "toolbar-title", maximized);
+        let bar = Rect::from_min_size(full.min, vec2(full.width(), HEADER_H));
         let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(12.0, 0.0))));
         bar_ui.horizontal_centered(|ui| {
             {
-                if !self.show_sidebar {
-                    ui.add_space(6.0);
-                    let origin = pos2(ui.cursor().left(), bar.center().y - 6.0);
-                    if let Some(a) = theme::traffic_lights(ui, origin) {
-                        window_action(&ctx, a, maximized);
-                    }
-                    ui.add_space(64.0);
-                }
                 if theme::toolbar_button(ui, pal, Icon::Sidebar, false, "Mostra/nascondi barra laterale").clicked() {
                     self.show_sidebar = !self.show_sidebar;
                 }
@@ -969,13 +898,6 @@ impl App {
                     self.show_plot = false;
                     self.show_sidebar = true;
                 }
-                ui.add_space(6.0);
-                ui.vertical(|ui| {
-                    ui.add_space(9.0);
-                    ui.label(RichText::new("Calcolatrice").font(theme::medium(14.0)).color(pal.text));
-                    let n = self.entries.iter().filter(|e| !e.text.trim().is_empty()).count();
-                    ui.label(RichText::new(format!("{n} espressioni")).font(FontId::proportional(11.0)).color(pal.text2));
-                });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let dark_icon = if pal.dark { Icon::Sun } else { Icon::Moon };
@@ -1001,13 +923,13 @@ impl App {
             }
         });
         ui.painter().hline(full.x_range(), bar.bottom(), Stroke::new(1.0, pal.separator.gamma_multiply(0.6)));
-        ui.add_space(TITLEBAR_H + 1.0);
+        ui.add_space(HEADER_H + 1.0);
     }
 
     fn plot_area(&mut self, ui: &mut Ui, pal: &Palette, nb: &mut Notebook, roots: &[Option<Vec<f64>>]) {
         let ctx = ui.ctx().clone();
         let full = ui.max_rect();
-        let avail = Rect::from_min_max(pos2(full.left(), full.top() + TITLEBAR_H + 1.0), full.max).shrink(12.0);
+        let avail = Rect::from_min_max(pos2(full.left(), full.top() + HEADER_H + 1.0), full.max).shrink(12.0);
         let card = avail;
         ui.painter().rect(card, 10, pal.card, Stroke::new(1.0, pal.card_border), StrokeKind::Inside);
         let plot_rect = card.shrink(1.0);
@@ -1241,7 +1163,7 @@ impl App {
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
-            .anchor(Align2::RIGHT_TOP, vec2(-20.0, TITLEBAR_H + 10.0))
+            .anchor(Align2::RIGHT_TOP, vec2(-20.0, HEADER_H + 10.0))
             .frame(frame)
             .default_width(380.0)
             .show(ctx, |ui| {
@@ -1282,7 +1204,9 @@ impl App {
                         ("x³ − 2x = 1", "soluzioni (righe verticali)"),
                     ]);
                     section(ui, "VARIABILI", &[
-                        ("a = 3", "definisce una costante"),
+                        ("a = 3", "definisce una variabile"),
+                        ("a = 5   a = a + 1", "la ridefinisce dalla riga dopo in giù"),
+                        ("ans", "risultato della riga sopra"),
                         ("f(x) = x² + a", "definisce una funzione"),
                         ("a sin(k x)", "a e k sconosciute → slider"),
                         ("2 + 2 = 4", "verifica un'uguaglianza"),

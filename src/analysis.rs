@@ -198,6 +198,8 @@ pub fn analyze(inputs: &[Input], params: &mut BTreeMap<String, Param>, degrees: 
                         Kind::Equation(Expr::Var(name), rhs)
                     } else if crate::eval::builtin_constant(&name).is_some() {
                         return Err(format!("'{name}' è una costante predefinita"));
+                    } else if name == ANS {
+                        return Err("'ans' è il risultato della riga sopra".into());
                     } else {
                         Kind::Def(name, rhs)
                     }
@@ -214,21 +216,29 @@ pub fn analyze(inputs: &[Input], params: &mut BTreeMap<String, Param>, degrees: 
         kinds.push(k);
     }
 
-    // 2. Definizioni di variabili, risolte per punto fisso.
-    let def_names: HashSet<String> = kinds
+    // 1b. Ridefinizioni (a = 3 … a = 5, a = a + 1): ogni versione prende un nome
+    //     interno distinto, e ogni riga vede l'ultima definizione scritta sopra di lei.
+    rename_redefinitions(&mut kinds, &mut env);
+    // 1c. `ans` → definizioni nascoste col risultato della riga sopra.
+    let (ans_defs, ans_refs) = resolve_ans(&mut kinds, &mut env);
+
+    // 2. Definizioni di variabili (scritte e nascoste), risolte per punto fisso.
+    let defs: Vec<(usize, &String, &Expr)> = kinds
         .iter()
-        .filter_map(|k| match k {
-            Ok(Some(Kind::Def(n, _))) => Some(n.clone()),
+        .enumerate()
+        .filter_map(|(i, k)| match k {
+            Ok(Some(Kind::Def(n, rhs))) => Some((i, n, rhs)),
             _ => None,
         })
+        .chain(ans_defs.iter().enumerate().map(|(h, (n, rhs))| (kinds.len() + h, n, rhs)))
         .collect();
+    let def_names: HashSet<String> = defs.iter().map(|(_, n, _)| (*n).clone()).collect();
     let mut def_values: HashMap<usize, Result<f64, String>> = HashMap::new();
     let mut defined_by: HashMap<String, usize> = HashMap::new();
     let resolve_defs =
         |env: &mut Env, def_values: &mut HashMap<usize, Result<f64, String>>, defined_by: &mut HashMap<String, usize>| loop {
             let mut progress = false;
-            for (i, k) in kinds.iter().enumerate() {
-                let Ok(Some(Kind::Def(name, rhs))) = k else { continue };
+            for &(i, name, rhs) in &defs {
                 if def_values.contains_key(&i) {
                     continue;
                 }
@@ -326,13 +336,14 @@ pub fn analyze(inputs: &[Input], params: &mut BTreeMap<String, Param>, degrees: 
                             let mut a = analyze_expr(&rhs, &env, over);
                             if a.plot.is_some() {
                                 a.summary = Summary::Info(format!(
-                                    "grafico di {name} (dipende da {})",
+                                    "grafico di {} (dipende da {})",
+                                    pretty(&name),
                                     a.axis.clone().unwrap_or_default()
                                 ));
                             }
                             a
                         } else {
-                            Analysis::error(format!("definizione circolare di {name}"))
+                            Analysis::error(format!("definizione circolare di {}", pretty(&name)))
                         }
                     }
                 },
@@ -351,12 +362,136 @@ pub fn analyze(inputs: &[Input], params: &mut BTreeMap<String, Param>, degrees: 
                     a
                 }
             };
+            if let Some(n) = ans_refs.get(&i)
+                && !env.consts.contains_key(n)
+            {
+                a = Analysis::error("ans: la riga sopra non ha un valore numerico");
+            }
             a.params.retain(|p| used_params.contains(p));
             a
         })
         .collect();
 
     Notebook { rows, params: used_params }
+}
+
+/// Separatore dei nomi interni delle ridefinizioni: `a`, `a#2`, `a#3`…
+const VERSION_SEP: char = '#';
+
+/// Versione di `name` vista dalla riga `line`: quella dell'ultima definizione sopra,
+/// oppure la prima se il nome è usato prima di essere definito.
+fn visible_version(name: &str, def_lines: &[usize], line: usize) -> String {
+    match def_lines.iter().rposition(|&j| j < line) {
+        Some(n) if n > 0 => format!("{name}{VERSION_SEP}{}", n + 1),
+        _ => name.to_string(),
+    }
+}
+
+fn rename_vars(e: &mut Expr, names: &HashMap<&str, String>) {
+    match e {
+        Expr::Var(v) => {
+            if let Some(n) = names.get(v.as_str()) {
+                *v = n.clone();
+            }
+        }
+        Expr::Num(_) => {}
+        Expr::Neg(a) | Expr::Fact(a) => rename_vars(a, names),
+        Expr::Bin(_, a, b) => {
+            rename_vars(a, names);
+            rename_vars(b, names);
+        }
+        Expr::Call(_, args) | Expr::Tuple(args) => args.iter_mut().for_each(|a| rename_vars(a, names)),
+    }
+}
+
+/// Dà un nome interno a ogni ridefinizione e aggiorna i riferimenti di ogni riga.
+/// I nomi definiti una sola volta restano invariati (e indipendenti dall'ordine).
+fn rename_redefinitions(kinds: &mut [Result<Option<Kind>, String>], env: &mut Env) {
+    let mut def_lines: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, k) in kinds.iter().enumerate() {
+        if let Ok(Some(Kind::Def(name, _))) = k {
+            def_lines.entry(name.clone()).or_default().push(i);
+        }
+    }
+    def_lines.retain(|_, lines| lines.len() > 1);
+    if def_lines.is_empty() {
+        return;
+    }
+    for (i, k) in kinds.iter_mut().enumerate() {
+        let Ok(Some(kind)) = k else { continue };
+        let names: HashMap<&str, String> =
+            def_lines.iter().map(|(n, lines)| (n.as_str(), visible_version(n, lines, i))).collect();
+        rename_kind(kind, &names, env);
+        if let Kind::Def(name, _) = kind
+            && let Some(lines) = def_lines.get(name.as_str())
+        {
+            *name = visible_version(name, lines, i + 1);
+        }
+    }
+}
+
+/// Rinomina le variabili usate da una riga (non il nome che definisce).
+fn rename_kind(kind: &mut Kind, names: &HashMap<&str, String>, env: &mut Env) {
+    match kind {
+        Kind::Expr(e) | Kind::Def(_, e) => rename_vars(e, names),
+        Kind::Tuple(a, b) | Kind::Equation(a, b) => {
+            rename_vars(a, names);
+            rename_vars(b, names);
+        }
+        Kind::FuncDef(name, ps) => {
+            // I parametri della funzione nascondono le variabili omonime
+            let names = names.iter().filter(|(n, _)| !ps.iter().any(|p| p == *n)).map(|(n, v)| (*n, v.clone())).collect();
+            if let Some(f) = env.funcs.get_mut(name.as_str()) {
+                rename_vars(&mut f.body, &names);
+            }
+        }
+    }
+}
+
+/// Nome che nelle formule indica il risultato della riga sopra.
+const ANS: &str = "ans";
+
+/// Sostituisce `ans` con una definizione nascosta (`ans#j`) che vale il risultato
+/// dell'ultima riga sopra con un valore (espressione o definizione).
+/// Restituisce le definizioni nascoste e, per ogni riga che usa `ans`, il nome usato.
+fn resolve_ans(kinds: &mut [Result<Option<Kind>, String>], env: &mut Env) -> (Vec<(String, Expr)>, HashMap<usize, String>) {
+    let mut defs: Vec<(String, Expr)> = Vec::new();
+    let mut refs: HashMap<usize, String> = HashMap::new();
+    let mut last: Option<usize> = None;
+    for i in 0..kinds.len() {
+        let uses_ans = match &kinds[i] {
+            Ok(Some(Kind::Expr(e) | Kind::Def(_, e))) => contains_var(e, ANS),
+            Ok(Some(Kind::Tuple(a, b) | Kind::Equation(a, b))) => contains_var(a, ANS) || contains_var(b, ANS),
+            Ok(Some(Kind::FuncDef(name, ps))) => {
+                !ps.iter().any(|p| p == ANS) && env.funcs.get(name).is_some_and(|f| contains_var(&f.body, ANS))
+            }
+            _ => false,
+        };
+        if uses_ans {
+            match last {
+                Some(j) => {
+                    let name = format!("{ANS}{VERSION_SEP}{j}");
+                    if !defs.iter().any(|(n, _)| *n == name) {
+                        let value = match &kinds[j] {
+                            Ok(Some(Kind::Def(n, _))) => Expr::Var(n.clone()),
+                            Ok(Some(Kind::Expr(e))) => e.clone(),
+                            _ => unreachable!("last punta solo a espressioni e definizioni"),
+                        };
+                        defs.push((name.clone(), value));
+                    }
+                    if let Ok(Some(kind)) = &mut kinds[i] {
+                        rename_kind(kind, &HashMap::from([(ANS, name.clone())]), env);
+                    }
+                    refs.insert(i, name);
+                }
+                None => kinds[i] = Err("ans: nessun risultato nelle righe sopra".into()),
+            }
+        }
+        if matches!(kinds[i], Ok(Some(Kind::Expr(_) | Kind::Def(..)))) {
+            last = Some(i);
+        }
+    }
+    (defs, refs)
 }
 
 /// `f(x)` o `f(x, y)` per disegnare una funzione definita dall'utente.
@@ -537,6 +672,8 @@ fn analyze_equation(l: &Expr, r: &Expr, env: &Env, over: Option<&str>) -> Analys
 }
 
 pub fn pretty(name: &str) -> String {
+    // Le ridefinizioni si mostrano col nome scritto dall'utente
+    let name = name.split(VERSION_SEP).next().unwrap_or(name);
     match name {
         "theta" => "θ".into(),
         "pi" => "π".into(),
@@ -563,6 +700,46 @@ mod tests {
         assert!(matches!(nb.rows[0].summary, Summary::Defined(v) if v == 3.0));
         assert!(matches!(nb.rows[3].summary, Summary::Value(v) if v == 12.0));
         assert!(nb.params.is_empty());
+    }
+
+    #[test]
+    fn redefinitions_apply_from_their_line() {
+        let (nb, _) = run(&["a + 1", "a = 3", "a + 1", "a = 5", "a + 1", "a = a * 2", "a", "f(x) = x + a", "f(1)"]);
+        let values: Vec<f64> = nb
+            .rows
+            .iter()
+            .map(|r| match r.summary {
+                Summary::Value(v) | Summary::Defined(v) => v,
+                _ => f64::NAN,
+            })
+            .collect();
+        // Prima della prima definizione vale la prima; poi l'ultima scritta sopra
+        assert_eq!(&values[..7], &[4.0, 3.0, 4.0, 5.0, 6.0, 10.0, 10.0]);
+        assert_eq!(values[8], 11.0);
+        assert!(nb.params.is_empty());
+    }
+
+    #[test]
+    fn redefinition_does_not_capture_function_params() {
+        let (nb, _) = run(&["a = 1", "a = 2", "g(a) = a * 10", "g(3)"]);
+        assert!(matches!(nb.rows[3].summary, Summary::Value(v) if v == 30.0));
+    }
+
+    #[test]
+    fn ans_is_previous_result() {
+        let (nb, params) = run(&["2 + 3", "", "ans * 2", "b = ans + 1", "ans ^ 2", "sin(x)", "ans", "ans + 1"]);
+        let value = |i: usize| match nb.rows[i].summary {
+            Summary::Value(v) | Summary::Defined(v) => v,
+            _ => f64::NAN,
+        };
+        assert_eq!([value(2), value(3), value(4)], [10.0, 11.0, 121.0]);
+        // Dopo un grafico ans non ha valore; la riga dopo un errore usa ancora quella riga
+        assert!(matches!(nb.rows[6].summary, Summary::Error(_)));
+        assert!(matches!(nb.rows[7].summary, Summary::Error(_)));
+        assert!(params.is_empty() && nb.params.is_empty());
+        let (nb, _) = run(&["ans + 1", "ans = 3"]);
+        assert!(matches!(nb.rows[0].summary, Summary::Error(_)));
+        assert!(matches!(nb.rows[1].summary, Summary::Error(_)));
     }
 
     #[test]
@@ -601,7 +778,8 @@ mod tests {
     fn equation_check_and_errors() {
         let (nb, _) = run(&["2 + 2 = 4", "a = 1", "a = 2", "p = q", "q = p"]);
         assert!(matches!(nb.rows[0].summary, Summary::Bool { ok: true, .. }));
-        assert!(matches!(nb.rows[2].summary, Summary::Error(_)));
+        // Ridefinire una variabile è permesso
+        assert!(matches!(nb.rows[2].summary, Summary::Defined(v) if v == 2.0));
         assert!(matches!(nb.rows[3].summary, Summary::Error(_)));
     }
 

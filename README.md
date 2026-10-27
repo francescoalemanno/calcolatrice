@@ -2,14 +2,17 @@
 
 Calcolatrice scientifica per il desktop, scritta in Rust con [egui](https://github.com/emilk/egui).
 Accetta formule scritte come su carta, le calcola mentre scrivi e **disegna automaticamente il grafico
-delle variabili che non hai definito**. L'interfaccia imita lo stile di macOS.
+delle variabili che non hai definito**. L'interfaccia segue lo stile Adwaita di GNOME/Cinnamon,
+usa la barra del titolo del sistema e prende font e tema scuro dal desktop.
 
 ![Calcolatrice](docs/screenshot.png)
 
 ## Funzionalità
 
 - **Formule naturali**: `2x`, `3(x+1)`, `sin x`, `x²`, `√2`, `|x|`, `5!`, `π`, `100 - 10%`.
-- **Definizioni** di costanti e funzioni: `a = 3`, `f(x) = x² + a`, poi `f(2)`.
+- **Definizioni** di variabili e funzioni: `a = 3`, `f(x) = x² + a`, poi `f(2)`.
+  Una variabile si può ridefinire (`a = 5`, `a = a + 1`): ogni riga usa l'ultima
+  definizione scritta sopra di lei. `ans` è il risultato della riga sopra (`ans * 2`).
 - **Analisi**: derivate `diff(f(x), x)`, integrali `integral(exp(-t^2), t, -inf, inf)`,
   sommatorie `sum(1/k^2, k, 1, 100)` e produttorie `prod(…)`, funzioni a tratti `if(x < 0, -x, x)`.
 - **Grafici automatici** in base alle variabili libere:
@@ -100,16 +103,15 @@ cargo run --release
 
 Il riquadro **?** nella barra in alto elenca tutte le funzioni disponibili.
 
-**Font**: l'interfaccia usa SF Pro o Inter se installati, altrimenti Noto Sans
-(`noto-fonts` su Arch), altrimenti il carattere integrato di egui.
+**Font e tema**: l'interfaccia usa il font del desktop (impostazione `font-name` di
+Cinnamon/GNOME, risolta con fontconfig) e il tema scuro se il desktop lo richiede; il
+pulsante luna/sole forza chiaro o scuro. Senza fontconfig usa Noto Sans o il carattere
+integrato di egui.
 
 **Icona non visibile nel menu dopo l'installazione?** Su Cinnamon premi `Ctrl+Alt+Esc`
 (riavvia la shell senza chiudere le finestre); su altri desktop basta uscire e rientrare.
 
 **Dati salvati**: espressioni e impostazioni sono in `~/.local/share/calcolatrice/app.ron`.
-
-**Nota**: la finestra usa angoli arrotondati trasparenti; senza un compositor
-(es. su un window manager X11 minimale) negli angoli compare un piccolo bordo nero.
 
 ## Sviluppo
 
@@ -124,7 +126,7 @@ Struttura del codice in `src/`:
 - `eval.rs`: compilazione ed esecuzione delle espressioni, funzioni numeriche (integrali tanh-sinh, Γ, erf)
 - `analysis.rs`: decide cosa rappresenta ogni riga e quale grafico disegnare
 - `plotting.rs`: campionamento delle curve, radici, curve implicite (marching squares), mappe di colore
-- `theme.rs`: palette, caratteri e widget in stile macOS
+- `theme.rs`: palette Adwaita, font e tema del desktop, widget
 - `app.rs`: interfaccia
 
 ### Pubblicare una nuova versione

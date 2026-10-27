@@ -1,9 +1,9 @@
 [package]
 name = "calcolatrice"
-version = "0.1.3"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Calcolatrice scientifica con formule e grafici delle variabili libere, in stile macOS (Rust + egui)"
+description = "Calcolatrice scientifica con formule e grafici delle variabili libere (Rust + egui)"
 license = "MIT"
 authors = ["Francesco Alemanno <francescoalemanno710@gmail.com>"]
 repository = "https://github.com/francescoalemanno/calcolatrice"

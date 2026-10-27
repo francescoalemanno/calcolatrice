@@ -15,8 +15,6 @@ fn main() -> eframe::Result {
             .with_app_id("calcolatrice")
             .with_inner_size([1200.0, 780.0])
             .with_min_inner_size([760.0, 500.0])
-            .with_decorations(false)
-            .with_transparent(true)
             .with_icon(icon),
         ..Default::default()
     };
