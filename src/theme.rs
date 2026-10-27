@@ -237,6 +237,7 @@ pub enum Icon {
     Return,
     Help,
     Aspect,
+    Plot,
 }
 
 pub fn paint_icon(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color32) {
@@ -330,6 +331,18 @@ pub fn paint_icon(painter: &egui::Painter, icon: Icon, rect: Rect, color: Color3
             let b = Rect::from_center_size(c, vec2(s * 0.8, s * 0.8));
             painter.rect_stroke(b, 2.0, stroke, egui::StrokeKind::Inside);
             painter.text(c, egui::Align2::CENTER_CENTER, "1:1", medium(s * 0.32), color);
+        }
+        Icon::Plot => {
+            // Assi e una curva
+            painter.line_segment([r(-0.38, -0.38), r(-0.38, 0.38)], stroke);
+            painter.line_segment([r(-0.38, 0.38), r(0.4, 0.38)], stroke);
+            let pts = (0..=12)
+                .map(|k| {
+                    let t = k as f32 / 12.0;
+                    r(-0.3 + 0.66 * t, 0.05 - 0.22 * (t * std::f32::consts::TAU).sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(pts, stroke));
         }
     }
 }

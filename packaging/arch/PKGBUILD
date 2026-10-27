@@ -1,7 +1,7 @@
 # Maintainer: Francesco Alemanno <francescoalemanno710@gmail.com>
 
 pkgname=calcolatrice
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='Calcolatrice scientifica con formule e grafici delle variabili libere, in stile macOS'
 arch=('x86_64' 'aarch64')

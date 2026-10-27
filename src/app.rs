@@ -37,6 +37,8 @@ pub struct App {
     dark: Option<bool>,
     show_sidebar: bool,
     show_keypad: bool,
+    /// Pannello del grafico (senza, la barra laterale occupa tutta la finestra)
+    show_plot: bool,
     /// Tastierino scientifico (altrimenti base)
     scientific: bool,
     equal_aspect: bool,
@@ -47,6 +49,9 @@ pub struct App {
     show_help: bool,
     #[serde(skip)]
     styled_dark: Option<bool>,
+    /// Valore di `show_plot` per cui è stata impostata la dimensione minima della finestra
+    #[serde(skip)]
+    min_size_for: Option<bool>,
     /// Ultima riga con il cursore: destinazione del tastierino
     #[serde(skip)]
     active: Option<u64>,
@@ -98,11 +103,13 @@ impl Default for App {
             dark: None,
             show_sidebar: true,
             show_keypad: true,
+            show_plot: true,
             scientific: false,
             equal_aspect: true,
             second: false,
             show_help: false,
             styled_dark: None,
+            min_size_for: None,
             active: None,
             focus: None,
             view: None,
@@ -144,6 +151,8 @@ impl App {
             .unwrap_or_default();
         app.pending_bounds = Some(DEFAULT_VIEW);
         app.plot_width = 800.0;
+        // Almeno un pannello deve essere visibile
+        app.show_sidebar |= !app.show_plot;
         if app.entries.is_empty() {
             app.add_entry(0, String::new());
         }
@@ -307,6 +316,19 @@ impl eframe::App for App {
             self.heat.clear();
         }
         self.animate_params(&ctx);
+        if self.min_size_for != Some(self.show_plot) {
+            // Senza grafico la calcolatrice può stare in una finestra stretta
+            let min = if self.show_plot { vec2(760.0, 500.0) } else { vec2(320.0, 500.0) };
+            ctx.send_viewport_cmd(ViewportCommand::MinInnerSize(min));
+            // Il grafico ricompare in una finestra stretta: allargala
+            if let Some(inner) = ctx.input(|i| i.viewport().inner_rect)
+                && self.show_plot
+                && inner.width() < min.x
+            {
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(1200.0, inner.height().max(min.y))));
+            }
+            self.min_size_for = Some(self.show_plot);
+        }
 
         // Analisi di tutte le righe (costa microsecondi: si rifà a ogni frame).
         let (mut nb, mut roots) = self.analyze_all();
@@ -316,26 +338,35 @@ impl eframe::App for App {
         let full = ui.max_rect();
         ui.painter().rect(full, radius, pal.window, Stroke::NONE, StrokeKind::Inside);
 
-        if self.show_sidebar {
-            let frame = egui::Frame::new()
-                .fill(pal.sidebar)
-                .corner_radius(CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 });
-            egui::Panel::left("sidebar")
-                .resizable(true)
-                .default_size(350.0)
-                .size_range(300.0..=560.0)
-                .frame(frame)
-                .show(ui, |ui| self.sidebar(ui, &pal, &mut nb, &roots));
-            // La sidebar può aggiungere o togliere righe: rifai l'analisi per restare allineati.
+        if !self.show_plot {
+            // Solo la barra laterale, a tutta finestra
+            let frame = egui::Frame::new().fill(pal.sidebar).corner_radius(radius);
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| self.sidebar(ui, &pal, &mut nb, &roots));
             if nb.rows.len() != self.entries.len() {
-                (nb, roots) = self.analyze_all();
                 ctx.request_repaint();
             }
+        } else {
+            if self.show_sidebar {
+                let frame = egui::Frame::new()
+                    .fill(pal.sidebar)
+                    .corner_radius(CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 });
+                egui::Panel::left("sidebar")
+                    .resizable(true)
+                    .default_size(350.0)
+                    .size_range(300.0..=560.0)
+                    .frame(frame)
+                    .show(ui, |ui| self.sidebar(ui, &pal, &mut nb, &roots));
+                // La sidebar può aggiungere o togliere righe: rifai l'analisi per restare allineati.
+                if nb.rows.len() != self.entries.len() {
+                    (nb, roots) = self.analyze_all();
+                    ctx.request_repaint();
+                }
+            }
+            egui::CentralPanel::no_frame().show(ui, |ui| {
+                self.toolbar(ui, &pal, maximized);
+                self.plot_area(ui, &pal, &mut nb, &roots);
+            });
         }
-        egui::CentralPanel::no_frame().show(ui, |ui| {
-            self.toolbar(ui, &pal, maximized);
-            self.plot_area(ui, &pal, &mut nb, &roots);
-        });
 
         if self.show_help {
             self.help_window(&ctx, &pal);
@@ -411,13 +442,28 @@ impl App {
         if let Some(a) = theme::traffic_lights(ui, top.min + vec2(18.0, 20.0)) {
             window_action(&ctx, a, maximized);
         }
-        // Pulsante "+" accanto ai semafori
-        let plus_rect = Rect::from_min_size(pos2(bar.right() - 44.0, bar.top() + 12.0), vec2(32.0, 28.0));
-        let mut plus_ui = ui.new_child(egui::UiBuilder::new().max_rect(plus_rect));
-        let plus = theme::toolbar_button(&mut plus_ui, pal, Icon::Plus, false, "Nuova espressione");
-        if plus.clicked() {
+        // Pulsanti a destra dei semafori; senza grafico qui stanno anche quelli della toolbar
+        let buttons = Rect::from_min_max(pos2(bar.left() + 90.0, bar.top() + 12.0), pos2(bar.right() - 12.0, bar.top() + 40.0));
+        let mut buttons_ui = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(Layout::right_to_left(Align::Center)));
+        buttons_ui.spacing_mut().item_spacing.x = 4.0;
+        if theme::toolbar_button(&mut buttons_ui, pal, Icon::Plus, false, "Nuova espressione").clicked() {
             let id = self.add_entry(self.entries.len(), String::new());
             self.active = Some(id);
+        }
+        if !self.show_plot {
+            if theme::toolbar_button(&mut buttons_ui, pal, Icon::Plot, false, "Mostra grafico").clicked() {
+                self.show_plot = true;
+            }
+            if theme::toolbar_button(&mut buttons_ui, pal, Icon::Keypad, self.show_keypad, "Tastierino").clicked() {
+                self.show_keypad = !self.show_keypad;
+            }
+            if theme::toolbar_button(&mut buttons_ui, pal, Icon::Help, self.show_help, "Guida").clicked() {
+                self.show_help = !self.show_help;
+            }
+            let dark_icon = if pal.dark { Icon::Sun } else { Icon::Moon };
+            if theme::toolbar_button(&mut buttons_ui, pal, dark_icon, false, "Tema chiaro/scuro").clicked() {
+                self.dark = Some(!pal.dark);
+            }
         }
         ui.add_space(TITLEBAR_H);
 
@@ -439,8 +485,19 @@ impl App {
                 });
         }
 
+        // "Nuova riga" sempre in vista, fuori dall'area che scorre
+        egui::Panel::bottom("new-row")
+            .resizable(false)
+            .frame(egui::Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
+            .show(ui, |ui| {
+                if new_row_button(ui, pal).clicked() {
+                    let id = self.add_entry(self.entries.len(), String::new());
+                    self.active = Some(id);
+                }
+            });
+
         egui::CentralPanel::no_frame().show(ui, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
                 egui::Frame::new().inner_margin(Margin { left: 12, right: 12, top: 0, bottom: 12 }).show(ui, |ui| {
                     ui.add_space(2.0);
                     theme::section_header(ui, pal, "ESPRESSIONI");
@@ -491,6 +548,8 @@ impl App {
             let entry = &mut self.entries[i];
             let color = theme::series_color(entry.color, pal.dark);
             let plottable = row.plot.is_some();
+            // Riga appena aggiunta o raggiunta col tastierino/frecce: va portata in vista
+            let reveal = self.focus.is_some_and(|(fid, _)| fid == entry.id);
             let frame = egui::Frame::new()
                 .fill(pal.card)
                 .stroke(Stroke::new(1.0, if has_focus { pal.accent } else { pal.card_border }))
@@ -544,6 +603,9 @@ impl App {
                 });
                 summary_row(ui, pal, entry, row, roots[i].as_deref(), &mut self.copied, now);
             });
+            if reveal {
+                ui.scroll_to_rect(card.response.rect.expand(4.0), None);
+            }
             if has_focus {
                 // Anello di fuoco macOS
                 ui.painter().rect_stroke(
@@ -554,20 +616,6 @@ impl App {
                 );
             }
             ui.add_space(6.0);
-        }
-
-        // Riga vuota cliccabile per aggiungere
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-        let col = if resp.hovered() { pal.accent } else { pal.text3 };
-        ui.painter().rect_stroke(r, 10, Stroke::new(1.0, col.gamma_multiply(0.6)), StrokeKind::Inside);
-        theme::paint_icon(ui.painter(), Icon::Plus, Rect::from_center_size(r.center() - vec2(52.0, 0.0), vec2(14.0, 14.0)), col);
-        ui.painter().text(r.center() + vec2(8.0, 0.0), Align2::CENTER_CENTER, "Nuova riga", FontId::proportional(13.0), col);
-        if resp.clicked() {
-            insert_after = Some(self.entries.len().saturating_sub(1));
-            if self.entries.is_empty() {
-                self.add_entry(0, String::new());
-                insert_after = None;
-            }
         }
 
         if let Some((i, dir)) = move_focus {
@@ -634,6 +682,16 @@ impl App {
             ui.add_space(6.0);
         }
     }
+}
+
+/// Riga tratteggiata cliccabile per aggiungere un'espressione in fondo.
+fn new_row_button(ui: &mut Ui, pal: &Palette) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    let col = if resp.hovered() { pal.accent } else { pal.text3 };
+    ui.painter().rect_stroke(r, 10, Stroke::new(1.0, col.gamma_multiply(0.6)), StrokeKind::Inside);
+    theme::paint_icon(ui.painter(), Icon::Plus, Rect::from_center_size(r.center() - vec2(52.0, 0.0), vec2(14.0, 14.0)), col);
+    ui.painter().text(r.center() + vec2(8.0, 0.0), Align2::CENTER_CENTER, "Nuova riga", FontId::proportional(13.0), col);
+    resp
 }
 
 fn summary_row(
@@ -829,6 +887,10 @@ impl App {
                 }
                 if theme::toolbar_button(ui, pal, Icon::Sidebar, false, "Mostra/nascondi barra laterale").clicked() {
                     self.show_sidebar = !self.show_sidebar;
+                }
+                if theme::toolbar_button(ui, pal, Icon::Plot, true, "Nascondi grafico").clicked() {
+                    self.show_plot = false;
+                    self.show_sidebar = true;
                 }
                 ui.add_space(6.0);
                 ui.vertical(|ui| {

@@ -25,6 +25,7 @@ delle variabili che non hai definito**. L'interfaccia imita lo stile di macOS.
   | `a sin(k x)`                   | `a` e `k` diventano slider, animabili con ▶    |
 
 - **Tastierino** base o scientifico (con `2nd` per le funzioni inverse), modalità radianti/gradi.
+- **Pannello del grafico opzionale**: nascondendolo resta la sola calcolatrice, anche in una finestra stretta.
 - Tema chiaro e scuro (automatico o manuale); lo stato viene salvato alla chiusura.
 
 ## Installazione
