@@ -14,7 +14,7 @@ makedepends=('cargo')
 optdepends=("noto-fonts: carattere dell'interfaccia (altrimenti quello integrato)"
             'ttf-dejavu: simboli matematici aggiuntivi')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('9242b1e459f989a03ac5a73d53950dda959acfe7d47f5d56fe476b99d0548e0a')
+sha256sums=('b09e6f40b88ebbcf77dbcca4e12150cebbc0b37f81f923de67901be196f5de25')
 
 prepare() {
   cd "$pkgname-$pkgver"
