@@ -89,7 +89,7 @@ cargo run --release
 
 | Tasto / azione                       | Effetto                                     |
 |--------------------------------------|---------------------------------------------|
-| `Invio`                              | nuova riga                                  |
+| `Invio` nella barra in basso         | calcola e aggiunge la formula all'elenco    |
 | `↑` / `↓`                            | riga precedente / successiva                |
 | `⌫` su una riga vuota                | elimina la riga                             |
 | clic sul pallino colorato            | mostra/nasconde il grafico                  |

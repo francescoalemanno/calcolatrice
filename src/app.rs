@@ -31,6 +31,8 @@ struct Entry {
 #[serde(default)]
 pub struct App {
     entries: Vec<Entry>,
+    /// Formula in scrittura nella barra in basso, non ancora calcolata
+    draft: String,
     params: BTreeMap<String, Param>,
     next_id: u64,
     degrees: bool,
@@ -58,6 +60,9 @@ pub struct App {
     /// Riga a cui dare il fuoco al prossimo frame, con posizione del cursore
     #[serde(skip)]
     focus: Option<(u64, Option<usize>)>,
+    /// Riga da portare in vista nell'elenco quando compare
+    #[serde(skip)]
+    reveal: Option<u64>,
     #[serde(skip)]
     view: Option<View>,
     #[serde(skip)]
@@ -98,6 +103,7 @@ impl Default for App {
         App {
             next_id: entries.len() as u64,
             entries,
+            draft: String::new(),
             params,
             degrees: false,
             dark: None,
@@ -112,6 +118,7 @@ impl Default for App {
             min_size_for: None,
             active: None,
             focus: None,
+            reveal: None,
             view: None,
             pending_bounds: Some(DEFAULT_VIEW),
             plot_width: 800.0,
@@ -129,6 +136,9 @@ enum KeyAction {
     Second,
     Degrees,
 }
+
+/// Id riservato alla barra di inserimento in basso (stesso spazio degli id delle righe)
+const COMPOSER: u64 = u64::MAX;
 
 fn text_id(entry: u64) -> Id {
     Id::unique(("entry-text", entry))
@@ -153,10 +163,22 @@ impl App {
         app.plot_width = 800.0;
         // Almeno un pannello deve essere visibile
         app.show_sidebar |= !app.show_plot;
-        if app.entries.is_empty() {
-            app.add_entry(0, String::new());
-        }
+        // Si comincia a scrivere dalla barra in basso
+        app.active = Some(COMPOSER);
+        app.focus = Some((COMPOSER, None));
         app
+    }
+
+    /// Aggiunge in fondo all'elenco la formula della barra in basso e la svuota.
+    fn submit_draft(&mut self) {
+        let text = self.draft.trim().to_string();
+        if !text.is_empty() {
+            let id = self.add_entry(self.entries.len(), text);
+            self.reveal = Some(id);
+            self.draft.clear();
+        }
+        self.active = Some(COMPOSER);
+        self.focus = Some((COMPOSER, Some(0)));
     }
 
     fn add_entry(&mut self, at: usize, text: String) -> u64 {
@@ -206,23 +228,24 @@ impl App {
             KeyAction::Degrees => return self.degrees = !self.degrees,
             _ => {}
         }
+        // Senza una riga dell'elenco attiva il tastierino scrive nella barra in basso
+        let row = self.active.and_then(|id| self.entries.iter().position(|e| e.id == id));
         if let KeyAction::NewLine = action {
-            let at = self.active.and_then(|id| self.entries.iter().position(|e| e.id == id)).map_or(self.entries.len(), |i| i + 1);
-            let id = self.add_entry(at, String::new());
-            self.active = Some(id);
+            match row {
+                Some(i) => {
+                    let id = self.add_entry(i + 1, String::new());
+                    self.active = Some(id);
+                }
+                None => self.submit_draft(),
+            }
             return;
         }
-        let idx = match self.active.and_then(|id| self.entries.iter().position(|e| e.id == id)) {
-            Some(i) => i,
-            None => {
-                let id = self.add_entry(self.entries.len(), String::new());
-                self.active = Some(id);
-                self.entries.len() - 1
-            }
+        let (eid, text) = match row {
+            Some(i) => (self.entries[i].id, &mut self.entries[i].text),
+            None => (COMPOSER, &mut self.draft),
         };
-        let entry = &mut self.entries[idx];
-        let tid = text_id(entry.id);
-        let len = char_len(&entry.text);
+        let tid = text_id(eid);
+        let len = char_len(text);
         let mut state = egui::text_edit::TextEditState::load(ctx, tid).unwrap_or_default();
         let (start, end) = state
             .cursor
@@ -232,23 +255,23 @@ impl App {
                 (a.index.0.min(len), b.index.0.min(len))
             })
             .unwrap_or((len, len));
-        let (bs, be) = (byte_at(&entry.text, start), byte_at(&entry.text, end));
+        let (bs, be) = (byte_at(text, start), byte_at(text, end));
         let cursor = match action {
             KeyAction::Insert(s) => {
-                entry.text.replace_range(bs..be, s);
+                text.replace_range(bs..be, s);
                 start + char_len(s)
             }
             KeyAction::Clear => {
-                entry.text.clear();
+                text.clear();
                 0
             }
             KeyAction::Backspace => {
                 if start != end {
-                    entry.text.replace_range(bs..be, "");
+                    text.replace_range(bs..be, "");
                     start
                 } else if start > 0 {
-                    let b0 = byte_at(&entry.text, start - 1);
-                    entry.text.replace_range(b0..bs, "");
+                    let b0 = byte_at(text, start - 1);
+                    text.replace_range(b0..bs, "");
                     start - 1
                 } else {
                     0
@@ -258,7 +281,7 @@ impl App {
         };
         state.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(cursor))));
         state.store(ctx, tid);
-        self.focus = Some((entry.id, Some(cursor)));
+        self.focus = Some((eid, Some(cursor)));
     }
 
     fn analyze_all(&mut self) -> (Notebook, Vec<Option<Vec<f64>>>) {
@@ -447,8 +470,8 @@ impl App {
         let mut buttons_ui = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(Layout::right_to_left(Align::Center)));
         buttons_ui.spacing_mut().item_spacing.x = 4.0;
         if theme::toolbar_button(&mut buttons_ui, pal, Icon::Plus, false, "Nuova espressione").clicked() {
-            let id = self.add_entry(self.entries.len(), String::new());
-            self.active = Some(id);
+            self.active = Some(COMPOSER);
+            self.focus = Some((COMPOSER, None));
         }
         if !self.show_plot {
             if theme::toolbar_button(&mut buttons_ui, pal, Icon::Plot, false, "Mostra grafico").clicked() {
@@ -485,16 +508,11 @@ impl App {
                 });
         }
 
-        // "Nuova riga" sempre in vista, fuori dall'area che scorre
-        egui::Panel::bottom("new-row")
+        // Barra di inserimento sempre in vista, fuori dall'area che scorre
+        egui::Panel::bottom("composer")
             .resizable(false)
             .frame(egui::Frame::new().inner_margin(Margin { left: 12, right: 12, top: 6, bottom: 10 }))
-            .show(ui, |ui| {
-                if new_row_button(ui, pal).clicked() {
-                    let id = self.add_entry(self.entries.len(), String::new());
-                    self.active = Some(id);
-                }
-            });
+            .show(ui, |ui| self.composer(ui, pal));
 
         egui::CentralPanel::no_frame().show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
@@ -512,6 +530,72 @@ impl App {
                 });
             });
         });
+    }
+
+    /// [ Scrivi una formula… ] [ Calcola ]: Invio o il pulsante aggiungono la formula in fondo.
+    fn composer(&mut self, ui: &mut Ui, pal: &Palette) {
+        let ctx = ui.ctx().clone();
+        let tid = text_id(COMPOSER);
+        let has_focus = ctx.memory(|m| m.has_focus(tid));
+        if has_focus
+            && let Some(last) = self.entries.last()
+            && ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::ArrowUp))
+        {
+            self.focus = Some((last.id, None));
+        }
+        let h = 36.0;
+        let button_w = 92.0;
+        let mut submit = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let field_w = ui.available_width() - button_w - 8.0;
+            let frame = egui::Frame::new()
+                .fill(pal.card)
+                .stroke(Stroke::new(1.0, if has_focus { pal.accent } else { pal.card_border }))
+                .corner_radius(10)
+                .inner_margin(Margin { left: 12, right: 8, top: 8, bottom: 8 });
+            let field = frame.show(ui, |ui| {
+                ui.set_width(field_w - 20.0);
+                let edit = egui::TextEdit::singleline(&mut self.draft)
+                    .id(tid)
+                    .frame(egui::Frame::NONE)
+                    .font(FontId::proportional(16.0))
+                    .text_color(pal.text)
+                    .hint_text(RichText::new("Scrivi una formula…").color(pal.text3))
+                    .desired_width(f32::INFINITY);
+                let resp = ui.add(edit);
+                if resp.has_focus() || resp.gained_focus() {
+                    self.active = Some(COMPOSER);
+                }
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    submit = true;
+                }
+                if let Some((fid, cursor)) = self.focus
+                    && fid == COMPOSER
+                {
+                    resp.request_focus();
+                    if let Some(c) = cursor {
+                        let mut st = egui::text_edit::TextEditState::load(&ctx, tid).unwrap_or_default();
+                        st.cursor.set_char_range(Some(CCursorRange::one(CCursor::new(c))));
+                        st.store(&ctx, tid);
+                    }
+                    self.focus = None;
+                }
+            });
+            if has_focus {
+                ui.painter().rect_stroke(
+                    field.response.rect.expand(2.0),
+                    12,
+                    Stroke::new(3.0, pal.accent.gamma_multiply(0.35)),
+                    StrokeKind::Outside,
+                );
+            }
+            let button = theme::calc_key(ui, pal, KeyFace::Text("Calcola"), KeyKind::Operator, vec2(button_w, h));
+            submit |= button.on_hover_text("Aggiungi all'elenco (Invio)").clicked();
+        });
+        if submit {
+            self.submit_draft();
+        }
     }
 
     fn entry_list(&mut self, ui: &mut Ui, pal: &Palette, nb: &mut Notebook, roots: &[Option<Vec<f64>>]) {
@@ -537,7 +621,6 @@ impl App {
                     move_focus = Some((i, 1));
                 }
                 if self.entries[i].text.is_empty()
-                    && n > 1
                     && ui.input_mut(|inp| inp.consume_key(Modifiers::NONE, Key::Backspace))
                 {
                     delete = Some(i);
@@ -549,7 +632,7 @@ impl App {
             let color = theme::series_color(entry.color, pal.dark);
             let plottable = row.plot.is_some();
             // Riga appena aggiunta o raggiunta col tastierino/frecce: va portata in vista
-            let reveal = self.focus.is_some_and(|(fid, _)| fid == entry.id);
+            let reveal = self.focus.is_some_and(|(fid, _)| fid == entry.id) || self.reveal == Some(entry.id);
             let frame = egui::Frame::new()
                 .fill(pal.card)
                 .stroke(Stroke::new(1.0, if has_focus { pal.accent } else { pal.card_border }))
@@ -605,6 +688,7 @@ impl App {
             });
             if reveal {
                 ui.scroll_to_rect(card.response.rect.expand(4.0), None);
+                self.reveal = None;
             }
             if has_focus {
                 // Anello di fuoco macOS
@@ -620,17 +704,20 @@ impl App {
 
         if let Some((i, dir)) = move_focus {
             let j = i as i32 + dir;
-            if j >= 0 && (j as usize) < self.entries.len() && Some(i) != delete.filter(|_| dir > 0) {
-                self.focus = Some((self.entries[j as usize].id, None));
+            match usize::try_from(j).ok().and_then(|j| self.entries.get(j)) {
+                Some(e) => self.focus = Some((e.id, None)),
+                // Sotto all'ultima riga, o eliminata la prima: si torna alla barra in basso
+                None if dir > 0 || delete.is_some() => {
+                    self.active = Some(COMPOSER);
+                    self.focus = Some((COMPOSER, None));
+                }
+                None => {}
             }
         }
         if let Some(i) = delete {
             let id = self.entries[i].id;
             self.entries.remove(i);
             self.heat.remove(&id);
-            if self.entries.is_empty() {
-                self.add_entry(0, String::new());
-            }
         }
         if let Some(i) = insert_after {
             let id = self.add_entry(i + 1, String::new());
@@ -682,16 +769,6 @@ impl App {
             ui.add_space(6.0);
         }
     }
-}
-
-/// Riga tratteggiata cliccabile per aggiungere un'espressione in fondo.
-fn new_row_button(ui: &mut Ui, pal: &Palette) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-    let col = if resp.hovered() { pal.accent } else { pal.text3 };
-    ui.painter().rect_stroke(r, 10, Stroke::new(1.0, col.gamma_multiply(0.6)), StrokeKind::Inside);
-    theme::paint_icon(ui.painter(), Icon::Plus, Rect::from_center_size(r.center() - vec2(52.0, 0.0), vec2(14.0, 14.0)), col);
-    ui.painter().text(r.center() + vec2(8.0, 0.0), Align2::CENTER_CENTER, "Nuova riga", FontId::proportional(13.0), col);
-    resp
 }
 
 fn summary_row(
@@ -1212,7 +1289,8 @@ impl App {
                     ]);
                     section(ui, "FUNZIONI", FUNCTION_HELP);
                     section(ui, "TASTIERA", &[
-                        ("Invio", "nuova riga"),
+                        ("Invio nella barra in basso", "calcola e aggiungi all'elenco"),
+                        ("Invio su una riga", "nuova riga sotto"),
                         ("↑ ↓", "riga precedente/successiva"),
                         ("⌫ su riga vuota", "elimina la riga"),
                         ("doppio clic sul grafico", "vista iniziale"),
