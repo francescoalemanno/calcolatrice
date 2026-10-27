@@ -1,6 +1,6 @@
 pkgbase = calcolatrice
 	pkgdesc = Calcolatrice scientifica con formule e grafici delle variabili libere, in stile macOS
-	pkgver = 0.1.2
+	pkgver = 0.1.3
 	pkgrel = 1
 	url = https://github.com/francescoalemanno/calcolatrice
 	arch = x86_64
@@ -19,7 +19,7 @@ pkgbase = calcolatrice
 	depends = wayland
 	optdepends = noto-fonts: carattere dell'interfaccia (altrimenti quello integrato)
 	optdepends = ttf-dejavu: simboli matematici aggiuntivi
-	source = calcolatrice-0.1.2.tar.gz::https://github.com/francescoalemanno/calcolatrice/archive/refs/tags/v0.1.2.tar.gz
-	sha256sums = b09e6f40b88ebbcf77dbcca4e12150cebbc0b37f81f923de67901be196f5de25
+	source = calcolatrice-0.1.3.tar.gz::https://github.com/francescoalemanno/calcolatrice/archive/refs/tags/v0.1.3.tar.gz
+	sha256sums = 4b52a60e540a9703b927dd7790eaa547bb240cd33124d514976c95cb09ad6ae7
 
 pkgname = calcolatrice
